@@ -74,14 +74,15 @@ static int make_socket(struct sockaddr_un* addr, socklen_t *addrlen) {
     return sock;
 }
 
-static size_t wmem_max(void) {
-#define WMEM_MAX "/proc/sys/net/core/wmem_max"
-    FILE *f;
-    size_t sz;
-    f = fopen(WMEM_MAX, "r");
-    if (!f || fscanf(f, "%zu", &sz) != 1) fail(WMEM_MAX);
-    fclose(f);
-    return sz;
+static size_t recv_buf_size(void) {
+    int v;
+    socklen_t len = sizeof v;
+    if (
+        getsockopt(master_sock, SOL_SOCKET, SO_RCVBUF, &v, &len) != 0
+    ) {
+        fail("getsockopt");
+    }
+    return v;
 }
 
 int main(int argc, char **argv) {
@@ -121,7 +122,7 @@ int main(int argc, char **argv) {
     output_sock = make_socket(&output_addr, &output_addrlen);
     error_sock  = make_socket(&error_addr,  &error_addrlen);
 
-    msg_size_max = wmem_max();
+    msg_size_max = recv_buf_size();
     if (!(msg_buf = malloc(msg_size_max))) fail("malloc");
 
     if (
@@ -166,7 +167,8 @@ int main(int argc, char **argv) {
         struct iovec iov[2];
         msg_addrlen = sizeof msg_addr;
         rc = recvfrom(
-            master_sock, msg_buf, msg_size_max, 0, &msg_addr, &msg_addrlen
+            master_sock, msg_buf, msg_size_max, 0,
+            (struct sockaddr*)&msg_addr, &msg_addrlen
         );
         if (rc < 0) {
             if (errno == EAGAIN || errno == EWOULDBLOCK) break;

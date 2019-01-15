@@ -12,20 +12,22 @@
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
+#include <sys/socket.h>
+#include <sys/types.h>
 #include <sys/uio.h>
 #include <unistd.h>
 
 #include "hook_engine/hook_engine.h"
 
-static size_t wmem_default;
+static unsigned send_buf_size;
 
 ssize_t __real__write(int fd, const void *buf, size_t count);
 HOOK_DEFINE_TRAMPOLINE(__real__write);
 
 static ssize_t __wrap__write(int fd, const void *buf, size_t count) {
     ssize_t rc = __real__write(fd, buf, count);
-    if (rc == -1 && errno == EMSGSIZE && count > wmem_default/2) {
-        return __real__write(fd, buf, wmem_default/2);
+    if (rc == -1 && errno == EMSGSIZE && count > send_buf_size/2) {
+        return __real__write(fd, buf, send_buf_size/2);
     }
     return rc;
 }
@@ -42,12 +44,12 @@ static ssize_t __wrap__writev(int fd, const struct iovec *iov, int iovcnt) {
         for (; n < iovcnt; ++n) {
             iov_copy[n] = iov[n];
             size += iov[n].iov_len;
-            if (size >= wmem_default/2) {
-                iov_copy[n++].iov_len -= size - wmem_default/2;
+            if (size >= send_buf_size/2) {
+                iov_copy[n++].iov_len -= size - send_buf_size/2;
                 break;
             }
         }
-        if (size > wmem_default/2) {
+        if (size > send_buf_size/2) {
             return __real__writev(fd, iov_copy, n);
         }
     }
@@ -55,18 +57,21 @@ static ssize_t __wrap__writev(int fd, const struct iovec *iov, int iovcnt) {
 }
 
 void init(void) {
-#define WMEM_DEFAULT "/proc/sys/net/core/wmem_default"
-    FILE *f;
+    int sock;
+    socklen_t len = sizeof send_buf_size;
     setvbuf(stdout, NULL, _IOLBF, 0);
-    f = fopen(WMEM_DEFAULT, "r");
-    if (!f || fscanf(f, "%zu", &wmem_default) != 1) {
+    sock = socket(AF_UNIX, SOCK_DGRAM, 0);
+    if (
+        sock == -1 ||
+        getsockopt(sock, SOL_SOCKET, SO_SNDBUF, &send_buf_size, &len) != 0
+    ) {
         fprintf(
-            stderr, "%s: %s: %s\n",
-            program_invocation_name, WMEM_DEFAULT, strerror(errno)
+            stderr, "%s: Get socket send buffer size: %s\n",
+            program_invocation_name, strerror(errno)
         );
-        wmem_default = 0x8000;
+        send_buf_size = 0x8000;
     }
-    if (f) fclose(f);
+    if (sock != -1) close(sock);
     if (
         hook_begin() != 0 ||
         hook_install(write,  __wrap__write,  __real__write ) != 0 ||
