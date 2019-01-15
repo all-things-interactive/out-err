@@ -1,0 +1,12 @@
+; DO NOT EDIT (unless you know what you are doing)
+;
+; This subdirectory is a git "subrepo", and this file is maintained by the
+; git-subrepo command. See https://github.com/git-commands/git-subrepo#readme
+;
+[subrepo]
+	remote = https://github.com/all-things-interactive/hook-engine.git
+	branch = master
+	commit = 7442ef19d4bd69fe11208e636a3fc5601a5ed800
+	parent = 684ad9dacf2d84e0eeb9c205412b30f48a3dc41b
+	method = merge
+	cmdver = 0.4.0
