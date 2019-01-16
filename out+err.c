@@ -30,7 +30,7 @@ static void sigchld_handler(int sig) {
     const int errno_old = errno;
     int status;
     if (
-        waitpid(-1, &status, WNOHANG) > 0 ||
+        waitpid(-1, &status, WNOHANG) > 0 &&
         (WIFEXITED(status) || WIFSIGNALED(status))
     ) {
         child_status = status;
