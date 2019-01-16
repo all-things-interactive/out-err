@@ -27,34 +27,68 @@ HOOK_DEFINE_TRAMPOLINE(__real__write);
 
 static ssize_t __wrap__write(int fd, const void *buf, size_t count) {
     ssize_t rc = __real__write(fd, buf, count);
-    if (rc == -1 && errno == EMSGSIZE && count > send_buf_size/2) {
-        return __real__write(fd, buf, send_buf_size/2);
+    if (rc == -1 && errno == EMSGSIZE) {
+        const void *p = buf;
+        while (count && (rc = __real__write(
+            fd, p, count <= send_buf_size / 2 ? count : send_buf_size / 2)
+        ) > 0) {
+            p += rc;
+            count -= rc;
+        }
+        return p==buf ? rc : p - buf;
     }
     return rc;
 }
+
+static int iov_copy(
+#define IOV_COUNT 32 // 512 B
+    struct iovec iovcopy[IOV_COUNT], const struct iovec *iov, int iovcnt,
+    size_t offset
+);
 
 ssize_t __real__writev(int fd, const struct iovec *iov, int iovcnt);
 HOOK_DEFINE_TRAMPOLINE(__real__writev);
 
 static ssize_t __wrap__writev(int fd, const struct iovec *iov, int iovcnt) {
     ssize_t rc = __real__writev(fd, iov, iovcnt);
-    if (rc == -1 && errno == EMSGSIZE && iovcnt <= IOV_MAX) {
-        struct iovec iov_copy[IOV_MAX];
-        int n = 0;
-        size_t size = 0;
-        for (; n < iovcnt; ++n) {
-            iov_copy[n] = iov[n];
-            size += iov[n].iov_len;
-            if (size >= send_buf_size/2) {
-                iov_copy[n++].iov_len -= size - send_buf_size/2;
-                break;
+    if (rc == -1 && errno == EMSGSIZE && iovcnt) {
+        size_t total = 0;
+        size_t offset = 0;
+        struct iovec iovcopy[IOV_COUNT];
+        while ((rc = __real__writev(
+            fd, iovcopy, iov_copy(iovcopy, iov, iovcnt, offset))
+        ) > 0) {
+            total += rc;
+            offset += rc;
+            while (iov[0].iov_len >= offset) {
+                offset -= iov[0].iov_len;
+                ++iov;
+                if (!--iovcnt) return total;
             }
         }
-        if (size > send_buf_size/2) {
-            return __real__writev(fd, iov_copy, n);
-        }
+        return total ? (ssize_t)total : rc;
     }
     return rc;
+}
+
+static int iov_copy(
+    struct iovec iovcopy[IOV_COUNT], const struct iovec *iov, int iovcnt,
+    size_t offset
+) {
+    size_t limit = offset + send_buf_size / 2;
+    int n = 0;
+    while (n < IOV_COUNT && n < iovcnt) {
+        iovcopy[n].iov_base = iov[n].iov_base;
+        if (iov[n].iov_len >= limit) {
+            iovcopy[n++].iov_len = limit;
+            break;
+        }
+        limit -= (iovcopy[n].iov_len = iov[n].iov_len);
+        ++n;
+    }
+    iovcopy[0].iov_base += offset;
+    iovcopy[0].iov_len -= offset;
+    return n;
 }
 
 #ifdef MUSL
