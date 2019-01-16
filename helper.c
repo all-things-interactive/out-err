@@ -156,7 +156,6 @@ static size_t __wrap__stdio_write(
 void init(void) {
     int sock;
     socklen_t len = sizeof send_buf_size;
-    setvbuf(stdout, NULL, _IOLBF, 0);
     sock = socket(AF_UNIX, SOCK_DGRAM, 0);
     if (
         sock == -1 ||
@@ -183,4 +182,5 @@ void init(void) {
         exit(EXIT_FAILURE);
     }
     hook_end();
+    setvbuf(stdout, NULL, _IOLBF, 0);
 }
