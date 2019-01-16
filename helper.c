@@ -11,6 +11,7 @@
 #include <errno.h>
 #include <limits.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -56,6 +57,68 @@ static ssize_t __wrap__writev(int fd, const struct iovec *iov, int iovcnt) {
     return rc;
 }
 
+#ifdef MUSL
+// MUSL uses bare syscalls in its stdio implementation, forcing us to
+// replace a whole function.
+// https://github.com/ifduyue/musl/blob/79f653c6bc2881dd6855299c908a442f56cb7c2b/src/internal/stdio_impl.h#L21
+struct _MUSL_FILE {
+    unsigned flags;
+    unsigned char *rpos, *rend;
+    int (*close)(FILE *);
+    unsigned char *wend, *wpos;
+    unsigned char *mustbezero_1;
+    unsigned char *wbase;
+    size_t (*read)(struct _MUSL_FILE *, unsigned char *, size_t);
+    size_t (*write)(struct _MUSL_FILE *, const unsigned char *, size_t);
+    off_t (*seek)(struct _MUSL_FILE *, off_t, int);
+    unsigned char *buf;
+    size_t buf_size;
+    struct _MUSL_FILE *prev, *next;
+    int fd;
+    // more irrelevant members follow
+};
+
+#define F_ERR 32
+
+size_t __stdio_write(
+    struct _MUSL_FILE *f, const unsigned char *buf, size_t len
+);
+
+// https://github.com/ifduyue/musl/blob/b4b1e10364c8737a632be61582e05a8d3acf5690/src/stdio/__stdio_write.c#L4
+static size_t __wrap__stdio_write(
+    struct _MUSL_FILE *f, const unsigned char *buf, size_t len
+) {
+    struct iovec iovs[2] = {
+        { .iov_base = f->wbase, .iov_len = f->wpos-f->wbase },
+        { .iov_base = (void *)buf, .iov_len = len }
+    };
+    struct iovec *iov = iovs;
+    size_t rem = iov[0].iov_len + iov[1].iov_len;
+    int iovcnt = 2;
+    ssize_t cnt;
+    for (;;) {
+        cnt = __wrap__writev(f->fd, iov, iovcnt);
+        if (cnt == rem) {
+            f->wend = f->buf + f->buf_size;
+            f->wpos = f->wbase = f->buf;
+            return len;
+        }
+        if (cnt < 0) {
+            f->wpos = f->wbase = f->wend = 0;
+            f->flags |= F_ERR;
+            return iovcnt == 2 ? 0 : len-iov[0].iov_len;
+        }
+        rem -= cnt;
+        if (cnt > iov[0].iov_len) {
+            cnt -= iov[0].iov_len;
+            iov++; iovcnt--;
+        }
+        iov[0].iov_base = (char *)iov[0].iov_base + cnt;
+        iov[0].iov_len -= cnt;
+    }
+}
+#endif
+
 void init(void) {
     int sock;
     socklen_t len = sizeof send_buf_size;
@@ -76,10 +139,14 @@ void init(void) {
         hook_begin() != 0 ||
         hook_install(write,  __wrap__write,  __real__write ) != 0 ||
         hook_install(writev, __wrap__writev, __real__writev) != 0
+#ifdef MUSL
+        || hook_install(__stdio_write, __wrap__stdio_write, NULL) != 0
+#endif
     ) {
         fprintf(
             stderr, "%s: %s\n", program_invocation_name, hook_last_error()
         );
+        exit(EXIT_FAILURE);
     }
     hook_end();
 }
