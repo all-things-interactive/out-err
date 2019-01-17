@@ -6,7 +6,7 @@
 [subrepo]
 	remote = https://github.com/all-things-interactive/hook-engine.git
 	branch = master
-	commit = 7442ef19d4bd69fe11208e636a3fc5601a5ed800
-	parent = 684ad9dacf2d84e0eeb9c205412b30f48a3dc41b
+	commit = f61e797a48389145aa681926edf5784a1ad15b69
+	parent = b8aeefd91f276cfe53cd77ee98c898a01da8223d
 	method = merge
 	cmdver = 0.4.0
