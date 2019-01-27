@@ -85,6 +85,20 @@ static size_t recv_buf_size(void) {
     return v;
 }
 
+static void set_ldpreload(void) {
+#ifdef HELPER_SO
+    static char ldpreload_str[] = "LD_PRELOAD="HELPER_SO;
+    char *preload_list = getenv("LD_PRELOAD");
+    char *ldpreload = ldpreload_str;
+    if (preload_list) {
+        ldpreload = malloc(sizeof(ldpreload_str) + 1 + strlen(preload_list));
+        if (!ldpreload) fail("malloc");
+        sprintf(ldpreload, "%s:%s", ldpreload_str, preload_list);
+    }
+    if (putenv(ldpreload) != 0) fail("putenv");
+#endif
+}
+
 int main(int argc, char **argv) {
 
     int opt, fd;
@@ -151,9 +165,7 @@ int main(int argc, char **argv) {
         ) {
             fail("Redirect stdout/stderr");
         }
-#ifdef HELPER_SO
-        if (putenv("LD_PRELOAD="HELPER_SO) != 0) fail("putenv");
-#endif
+        set_ldpreload();
         execvp(argv[optind], argv + optind);
         fprintf(
             stderr, "%s: Failed to run '%s': %s\n",
