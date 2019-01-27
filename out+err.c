@@ -99,6 +99,17 @@ static void set_ldpreload(void) {
 #endif
 }
 
+static void set_stdiosock(const struct sockaddr_un *addr, socklen_t len) {
+    // autobound name in abstract namespace max 8 bytes
+    static char stdiosock[sizeof("STDIOSOCK=XXXXXXXX")];
+    sprintf(
+        stdiosock, "STDIOSOCK=%.*s",
+        (int)(len - offsetof(struct sockaddr_un, sun_path) - 1),
+        addr->sun_path + 1
+    );
+    if (putenv(stdiosock) != 0) fail("putenv");
+}
+
 int main(int argc, char **argv) {
 
     int opt, fd;
@@ -166,6 +177,7 @@ int main(int argc, char **argv) {
             fail("Redirect stdout/stderr");
         }
         set_ldpreload();
+        set_stdiosock(&master_addr, master_addrlen);
         execvp(argv[optind], argv + optind);
         fprintf(
             stderr, "%s: Failed to run '%s': %s\n",

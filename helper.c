@@ -9,25 +9,42 @@
 //   write() is called with a UNIX dgram socket used for stdin/stderr.
 #define _GNU_SOURCE 1
 #include <errno.h>
-#include <limits.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/uio.h>
+#include <sys/un.h>
 #include <unistd.h>
 
 #include "hook_engine/hook_engine.h"
 
+static struct sockaddr_un master_addr;
+static socklen_t master_addrlen;
 static unsigned send_buf_size;
+
+static int check_socket(int fd) {
+    struct sockaddr_un peer_addr;
+    socklen_t peer_addrlen = sizeof peer_addr;
+    if (
+        getpeername(fd, &peer_addr, &peer_addrlen) != 0 ||
+        peer_addrlen != master_addrlen ||
+        memcmp(&master_addr, &peer_addr, peer_addrlen)
+    ) {
+        errno = EMSGSIZE; // restore errno
+        return -1;
+    }
+    return 0;
+}
 
 ssize_t __real__write(int fd, const void *buf, size_t count);
 HOOK_DEFINE_TRAMPOLINE(__real__write);
 
 static ssize_t __wrap__write(int fd, const void *buf, size_t count) {
     ssize_t rc = __real__write(fd, buf, count);
-    if (rc == -1 && errno == EMSGSIZE) {
+    if (rc == -1 && errno == EMSGSIZE && check_socket(fd) == 0) {
         const void *p = buf;
         while (count && (rc = __real__write(
             fd, p, count <= send_buf_size / 2 ? count : send_buf_size / 2)
@@ -51,7 +68,7 @@ HOOK_DEFINE_TRAMPOLINE(__real__writev);
 
 static ssize_t __wrap__writev(int fd, const struct iovec *iov, int iovcnt) {
     ssize_t rc = __real__writev(fd, iov, iovcnt);
-    if (rc == -1 && errno == EMSGSIZE && iovcnt) {
+    if (rc == -1 && errno == EMSGSIZE && iovcnt && check_socket(fd) == 0) {
         size_t total = 0;
         size_t offset = 0;
         struct iovec iovcopy[IOV_COUNT];
@@ -154,9 +171,10 @@ static size_t __wrap__stdio_write(
 #endif
 
 void init(void) {
-    int sock;
+    int sock = socket(AF_UNIX, SOCK_DGRAM, 0);
     socklen_t len = sizeof send_buf_size;
-    sock = socket(AF_UNIX, SOCK_DGRAM, 0);
+    char *stdiosock;
+    size_t stdiosock_len;
     if (
         sock == -1 ||
         getsockopt(sock, SOL_SOCKET, SO_SNDBUF, &send_buf_size, &len) != 0
@@ -168,6 +186,17 @@ void init(void) {
         send_buf_size = 0x8000;
     }
     if (sock != -1) close(sock);
+    if (
+        (stdiosock = getenv("STDIOSOCK")) &&
+        (stdiosock_len = strlen(stdiosock)) <= sizeof(struct sockaddr_un)
+            - offsetof(struct sockaddr_un, sun_path) - 1
+    ) {
+        master_addr.sun_family = AF_UNIX;
+        master_addr.sun_path[0] = 0;
+        memcpy(master_addr.sun_path + 1, stdiosock, stdiosock_len);
+        master_addrlen =
+            offsetof(struct sockaddr_un, sun_path) + 1 + stdiosock_len;
+    }
     if (
         hook_begin() != 0 ||
         hook_install(write,  __wrap__write,  __real__write ) != 0 ||
